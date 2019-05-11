@@ -1,0 +1,219 @@
+```{r Packages}
+#https://ssp3nc3r.github.io/post/2017-12-03-run-expectancy-distributions/#the-median-run-expectancy-matrix
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(rstanarm)
+```
+
+
+
+```{r #Import Data}
+atbat <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_at_bat_batting_stats.csv")
+games <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/games.csv", 
+    col_types = cols(date = col_date(format = "%Y-%m-%d")))
+results <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/general/results.csv")
+```
+
+```{r #Filter data to MLB, regular season}
+atbat <- atbat %>% 
+  merge(games[ , c("game_id", "date", "league_id")], by = "game_id") %>% 
+  unite(col = base_state, base1,base2,base3, sep = "_") %>%
+  filter(league_id==100, date>=ymd("1946-03-29"), date<ymd("1946-10-02"))
+  
+```
+
+```{r Sequential events for games}
+atbat <- atbat %>% 
+  arrange(spot) %>% 
+  arrange(inning) %>% 
+  arrange(team_id) %>% 
+  arrange(game_id) %>% 
+  group_by(game_id, team_id, spot) %>% 
+  mutate(realspot = spot+10*(seq(n())-1)) %>% 
+  arrange(realspot) %>%
+  arrange(team_id) %>% 
+  arrange(game_id)
+```
+
+```{r Runs to Inning End}
+atbat <- atbat %>% 
+  group_by(game_id, team_id, inning) %>% 
+  mutate(runs_in_inning = sum(rbi), 
+         current_runs = cumsum(rbi),
+         runs_after_event = runs_in_inning - (current_runs-rbi)) %>% 
+  ungroup()
+```
+
+```{r TEST Filter to inning with multiple scoring times to test runs_after_event field}
+atbat %>% 
+  filter((game_id == 510 & inning == 2 & team_id == 11) | (game_id == 2483 & inning == 7 & team_id == 18)) %>% 
+  select(game_id, base_state, rbi, run_diff, current_runs, runs_after_event)
+```
+
+```{r TEST Runs Scored Frequency}
+atbat %>% 
+  group_by(game_id, team_id, inning) %>% 
+  summarise(runs = max(runs_in_inning)) %>% 
+  arrange(runs) %>% 
+  ggplot(mapping = aes(x=runs)) + stat_count() + 
+  scale_x_continuous(breaks = c(0:13)) +
+  labs(x = "Runs scored in half-inning", y = "Frequency")
+```
+
+```{r Turn runner states and outs into factors}
+runners_on_base <- 
+  c("0_0_0", "1_0_0", "0_1_0", "0_0_1", "1_1_0", "1_0_1", "0_1_1", "1_1_1")
+
+atbat <- transform(atbat, 
+                 base_state = factor(base_state, 
+                                 levels=runners_on_base,
+                                 labels=runners_on_base))
+# tranform outs into factor
+atbat <- transform(atbat, outs = factor(outs, 
+                                  levels=c("0", "1", "2")))
+
+```
+
+```{r Select only necessary columns into new DF}
+atbat_new <- atbat %>% 
+  select(base_state, outs, runs_after_event)
+```
+
+
+```{r Bayesian run expectancy model}
+#Took 28 minutes to run
+
+require(rstanarm)
+fit <- stan_glm(runs_after_event ~ -1 + base_state : outs, 
+                family = neg_binomial_2, 
+                data = atbat_new, 
+                QR = TRUE,
+                chains = 1, iter = 500, cores = 4, seed = TRUE)
+```
+
+```{r Median Run Expectancy Table}
+#summary(fit)
+
+# Extract and name coefficients from model
+m <- exp(coef(fit))
+m <- matrix(m, nrow = 8, ncol = 3, byrow = F)
+rownames(m) <- levels(atbat$base_state)
+colnames(m) <- levels(atbat$outs)
+
+# Reorder rows according to bases
+runners_on_base <- 
+  c("0_0_0", "1_0_0", "0_1_0", "0_0_1", "1_1_0", "1_0_1", "0_1_1", "1_1_1")
+m <- m[match(runners_on_base, rownames(m)),]
+
+# Show Matrix as Table
+m
+
+write_clip(m)
+```
+
+```{r compare the distributions of expected runs for each game state}
+# Extract posterior draws of the predictors, transform and reshape for plotting
+pp <- as.data.frame(fit)
+pp <- reshape2::melt(pp, 
+                     variable.name = "Game.State", 
+                     value.name="Expected.Runs")
+pp <- transform(pp, Game.State = as.character(Game.State))
+pp <- subset(pp, subset = Game.State != "reciprocal_dispersion")
+
+# Separate Base States from Outs
+pp <- transform(pp, Outs = substr(Game.State, start = 21, stop = 21))
+pp <- transform(pp, Runners = substr(Game.State, start = 11, stop = 15))
+
+# Reorganize order of Base States and Outs for a cleaner plot
+pp <- transform(pp, Outs = factor(Outs, 
+                                  levels=c("0", "1", "2"), 
+                                  labels=c("0 Outs", "1 Out", "2 Outs")))
+pp <- transform(pp, 
+      Runners = factor(Runners, 
+      levels=runners_on_base,
+      labels=runners_on_base))
+
+# Drop Unneeded Variables
+pp$Game.State <- NULL
+
+# Transform posterior estimates
+pp <- transform(pp, Expected.Runs = exp(Expected.Runs))
+
+# create the plot
+ggplot(pp) +
+  geom_density(aes(x = Expected.Runs), fill = "#C4D8E2") +
+  facet_grid(Runners ~ Outs, scales = "free_y", switch = "y") +
+  theme_gray() +
+  theme(axis.text.x = element_text(size = 6),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.text.x = element_text(size = 9, face = "bold"),
+        strip.text.y = element_text(size = 9, face = "bold", angle = 180),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.spacing.x = unit(1, "lines")) +
+  labs(x = "Expected Runs", y = "Baserunners")
+```
+
+```{r Add expected runs to atbat table}
+melted_matrix <- reshape2::melt(m, varnames = c("base_state", "outs"), value.name = "expected_runs")
+
+atbat <- atbat %>% 
+  merge(melted_matrix[ , c("base_state", "outs", "expected_runs")], by = c("base_state","outs")) %>% 
+  arrange(realspot) %>%
+  arrange(team_id) %>% 
+  arrange(game_id)
+
+```
+
+```{r DON'T RUN mean posterior estimates of observed at bats}
+#Doesn't seem to do the cbind match correctly
+# combine preditions with original data
+yrep <- posterior_predict(fit)
+atbat <- cbind(atbat, yrep = colMeans(yrep))
+
+# reorder levels for RUNNERS and OUTS_CT
+# Reorganize order of Base States and Outs for a cleaner plot
+atbat <- transform(atbat, Outs = factor(as.character(outs),
+                                  levels=c("0", "1", "2"),
+                                  labels=c("0 Outs", "1 Out", "2 Outs")))
+atbat <- transform(atbat,
+      Runners = factor(as.character(base_state),
+      levels=runners_on_base,
+      labels=runners_on_base))
+
+
+# plot posterior estimates from original data
+ggplot(atbat) +
+  geom_density(aes(x = yrep), fill = "#C4D8E2") +
+  facet_grid(Runners ~ Outs, scales = "free_y", switch = "y") +
+  theme_gray() +
+  theme(axis.text.x = element_text(size = 6),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.text.x = element_text(size = 9, face = "bold"),
+        strip.text.y = element_text(size = 9, face = "bold", angle = 180),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.spacing.x = unit(1, "lines")) +
+  labs(x = "Expected Runs", y = "Baserunners")
+```
+
+```{r Find run expectancy after event}
+atbat <- atbat %>% 
+    group_by(game_id, team_id, inning) %>%
+    mutate(expected_runs_after_event = lead(expected_runs_before_event, default = 0),
+           diff = expected_runs_after_event-expected_runs_before_event+rbi)
+```
+
+```{r Added run value by result}
+results_run_value <- atbat %>%
+  group_by(result) %>% 
+  summarise(run_value = mean(diff)) %>% 
+  merge(results[ ,c("result", "event")], by = "result") %>% 
+  select(event, run_value)
+
+write_clip(results_run_value)
+```
+

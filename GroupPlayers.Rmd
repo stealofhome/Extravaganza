@@ -1,0 +1,71 @@
+```{r Packages}
+#https://stats.stackexchange.com/questions/328216/mixed-data-in-gaussian-mixture-models
+library(dplyr)
+library(caret)
+library(mclust)
+library(readr)
+library(tidyr)
+#library(EMCluster)
+```
+
+```{r Import data}
+##########
+#Players
+##########
+players <- read_csv("C:/Users/stjohn/Documents/Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv_1946/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+
+##########
+#Batters
+##########
+bat <- read_csv("C:/Users/stjohn/Documents/Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv_1946/players_batting.csv")
+
+#Hitter type to factor
+bat$batting_ratings_misc_hitter_type <- as.factor(bat$batting_ratings_misc_hitter_type)
+
+#Move player_id to rowname to save for cluster export?
+#bat <- data.frame(bat, row.names = 1)
+
+#Encode hitter type variable
+dmy <- dummyVars("~ batting_ratings_misc_hitter_type", data = bat)
+trsf <- data.frame(predict(dmy, newdata = bat))
+bat <- cbind(bat, trsf)
+
+#Filter batting data to only non-retired MLB position players
+bat <- bat %>% 
+  filter(position!= 1) %>% 
+  merge(players[ , c("player_id", "name", "bats", "retired")], by = "player_id") %>% 
+  filter(retired!=1, league_id==100)
+```
+
+```{r Separate into tables}
+#LHB vs RHP
+batlvr <- bat %>% 
+  filter(bats == 2|bats == 3) %>% 
+  select(player_id, name, bats, position, contact_vsr = batting_ratings_vsr_contact, gap_vsr = batting_ratings_vsr_gap, eye_vsr = batting_ratings_vsr_eye, k_vsr = batting_ratings_vsr_strikeouts, hbp_vsr = batting_ratings_vsr_hp, power_vsr = batting_ratings_vsr_power, babip_vsr = batting_ratings_vsr_babip, bunt = batting_ratings_misc_bunt, bunt_hit = batting_ratings_misc_bunt_for_hit, hitter_type0 = batting_ratings_misc_hitter_type.0, hitter_type1 = batting_ratings_misc_hitter_type.1,hitter_type2 = batting_ratings_misc_hitter_type.2,hitter_type3 = batting_ratings_misc_hitter_type.3)
+
+#LHB vs LHP
+batlvl <- bat %>% 
+  filter(bats == 2) %>% 
+  select(player_id, name, bats, position, contact_vsl = batting_ratings_vsl_contact, gap_vsl = batting_ratings_vsl_gap, eye_vsl = batting_ratings_vsl_eye, k_vsl = batting_ratings_vsl_strikeouts, hbp_vsl = batting_ratings_vsl_hp, power_vsl = batting_ratings_vsl_power, babip_vsl = batting_ratings_vsl_babip, bunt = batting_ratings_misc_bunt, bunt_hit = batting_ratings_misc_bunt_for_hit, hitter_type0 = batting_ratings_misc_hitter_type.0, hitter_type1 = batting_ratings_misc_hitter_type.1,hitter_type2 = batting_ratings_misc_hitter_type.2,hitter_type3 = batting_ratings_misc_hitter_type.3)
+
+#RHB vs RHP
+batrvr <- bat %>% 
+  filter(bats == 1) %>% 
+  select(player_id, name, bats, position, contact_vsr = batting_ratings_vsr_contact, gap_vsr = batting_ratings_vsr_gap, eye_vsr = batting_ratings_vsr_eye, k_vsr = batting_ratings_vsr_strikeouts, hbp_vsr = batting_ratings_vsr_hp, power_vsr = batting_ratings_vsr_power, babip_vsr = batting_ratings_vsr_babip, bunt = batting_ratings_misc_bunt, bunt_hit = batting_ratings_misc_bunt_for_hit, hitter_type0 = batting_ratings_misc_hitter_type.0, hitter_type1 = batting_ratings_misc_hitter_type.1,hitter_type2 = batting_ratings_misc_hitter_type.2,hitter_type3 = batting_ratings_misc_hitter_type.3)
+
+#RHB vs LHP
+batrvl <- bat %>% 
+  filter(bats == 1|bats == 3) %>% 
+  select(player_id, name, bats, position, contact_vsl = batting_ratings_vsl_contact, gap_vsl = batting_ratings_vsl_gap, eye_vsl = batting_ratings_vsl_eye, k_vsl = batting_ratings_vsl_strikeouts, hbp_vsl = batting_ratings_vsl_hp, power_vsl = batting_ratings_vsl_power, babip_vsl = batting_ratings_vsl_babip, bunt = batting_ratings_misc_bunt, bunt_hit = batting_ratings_misc_bunt_for_hit, hitter_type0 = batting_ratings_misc_hitter_type.0, hitter_type1 = batting_ratings_misc_hitter_type.1,hitter_type2 = batting_ratings_misc_hitter_type.2,hitter_type3 = batting_ratings_misc_hitter_type.3)
+```
+
+```{r Fit tables to models}
+em_batlvr <- batlvr[,c(5:8,10)]
+
+fit_batlvr <- Mclust(em_batlvr, G = 5)
+summary(fit_batlvr, parameters = TRUE)
+
+class_batlvr <- cbind(batlvr$player_id, as.data.frame(fit_batlvr$classification))
+```
+

@@ -1,0 +1,677 @@
+
+```{r General, message=FALSE, warning=FALSE}
+#General if session restarts
+library(readr)
+library(dplyr)
+library(tidyr)
+library(Hmisc)
+library(clipr)
+library(lubridate)
+teams <- read_csv('Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/general/teams.csv')
+pos <- data.frame('posnum' = c(1,2,3,4,5,6,7,8,9),'posval' = c('P','C','1B','2B','3B','SS','LF','CF','RF'))
+leagues <- read_csv('Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/general/leagues.csv')
+```
+
+```{r NCAAAllStars, message=FALSE, warning=FALSE}
+#import data (players_basic, players_value, players_career_pitching_stats, players_career_batting_stats)
+players <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+players_career_pitching_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_pitching_stats.csv")
+players_value <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_value.csv")
+players_career_batting_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_batting_stats.csv")
+
+#Reduce pitching data to NCAA in current year
+pas <- players_career_pitching_stats %>% 
+  select(player_id, year, league_id,split_id, bf, ip, gs, wpa, war) %>% 
+  filter(league_id=='208' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id")
+
+#Compute avg/sd of WPA, WAR, and POT weighted by batters faced
+pwpaavg <- weighted.mean(pas$wpa, pas$bf)
+pwaravg <- weighted.mean(pas$war, pas$bf)
+ppotavg <- weighted.mean(pas$pot, pas$bf)
+pwpasd <- sqrt(wtd.var(pas$wpa, weights = pas$bf))
+pwarsd <- sqrt(wtd.var(pas$war, weights = pas$bf))
+ppotsd <- sqrt(wtd.var(pas$pot, weights = pas$bf))
+
+#z-scores for sp and rp
+pas <- pas %>% 
+  mutate(sprank = (wpa-pwpaavg)/pwpasd+2*((war-pwaravg)/pwarsd)+(pot-ppotavg)/ppotsd,
+         rprank = 2*((wpa-pwpaavg)/pwpasd)+(war-pwaravg)/pwarsd+2*((pot-ppotavg)/ppotsd))
+
+#select top 12 SP and top 4 RP
+AS <- pas %>% 
+  filter(gs!='0') %>% 
+  select(player_id, name, sprank, war) %>% 
+  arrange(desc(sprank)) %>% 
+  top_n(12,sprank) %>% 
+  mutate(pos="SP", team=c(1,2,1,2,1,2,1,2,1,2,1,2)) %>% 
+  rename(rank = sprank)
+
+AS <- pas %>% 
+  filter(gs=='0' & wpa>'0') %>% 
+  select(player_id, name, rprank, war) %>% 
+  arrange(desc(rprank)) %>% 
+  top_n(4,rprank) %>% 
+  mutate(pos="RP", team=c(1,2,1,2)) %>% 
+  rename(rank = rprank) %>% 
+  bind_rows(AS, .)
+
+#Filter batter data
+bas <- players_career_batting_stats %>% 
+  select(player_id, year, league_id, split_id, pa, wpa, war) %>% 
+  filter(league_id=='208' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name", "position")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id")
+
+#Compute avg/sd of WPA, WAR, and POT weighted by plate appearances
+bwpaavg <- weighted.mean(bas$wpa, bas$pa)
+bwaravg <- weighted.mean(bas$war, bas$pa)
+bpotavg <- weighted.mean(bas$pot, bas$pa)
+bwpasd <- sqrt(wtd.var(bas$wpa, weights = bas$pa))
+bwarsd <- sqrt(wtd.var(bas$war, weights = bas$pa))
+bpotsd <- sqrt(wtd.var(bas$pot, weights = bas$pa))
+
+#z-scores for hitters
+bas <- bas %>% 
+  mutate(brank = (wpa-bwpaavg)/bwpasd+3*((war-bwaravg)/bwarsd)+(pot-bpotavg)/bpotsd)
+
+#select top 4 C and top 2 for every other position, alternate between team 1 and 2
+AS <- bas %>% 
+  filter(position=='2') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(4,brank) %>% 
+  mutate(pos="C", team=c(1,2,1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+AS <- bas %>% 
+  filter(position=='3') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="1B", team=c(1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+AS <- bas %>% 
+  filter(position=='4') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="2B", team=c(1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+AS <- bas %>% 
+  filter(position=='5') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="3B", team=c(1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+AS <- bas %>% 
+  filter(position=='6') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="SS", team=c(1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+AS <- bas %>% 
+  filter(position=='7') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="LF", team=c(1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+AS <- bas %>% 
+  filter(position=='8') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="CF", team=c(1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+AS <- bas %>% 
+  filter(position=='9') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="RF", team=c(1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+#filter out hitters already selected to all-star game
+lasth <- anti_join(bas, AS, by=c("brank"= "rank"))
+
+#select top 6 players not already selected
+AS <- lasth %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(6,brank) %>% 
+  mutate(pos="H", team=c(1,2,1,2,1,2)) %>% 
+  rename(rank = brank) %>% 
+  bind_rows(AS, .)
+
+#create team 1 table for export to forum
+AS1 <- AS %>% 
+  filter(team=='1') %>%
+  select(player_id, name, war) %>% 
+  merge(players[ , c("player_id", "position", "team_id")], by = "player_id") %>%
+  merge(pos[ , c("posnum","posval")], by.x='position', by.y = 'posnum') %>%
+  merge(teams[ , c("team_id", "abbr")], by = "team_id") %>% 
+  select(c(6,4,5,7)) %>% 
+  mutate(war = round(war, digits = 2)) %>% 
+  rename(position = posval, school = abbr) %>% 
+  arrange(desc(war))
+
+#create team 2 table for export to forum
+AS2 <- AS %>% 
+  filter(team=='2') %>%
+  select(player_id, name, war) %>% 
+  merge(players[ , c("player_id", "position", "team_id")], by = "player_id") %>%
+  merge(pos[ , c("posnum","posval")], by.x='position', by.y = 'posnum') %>%
+  merge(teams[ , c("team_id", "abbr")], by = "team_id") %>% 
+  select(c(6,4,5,7)) %>% 
+  mutate(war = round(war, digits = 2)) %>% 
+  rename(position = posval, school = abbr) %>% 
+  arrange(desc(war))
+
+#Create tables to use for in-game voting
+bas <- AS %>% 
+  filter(pos != 'SP' , pos != 'RP') %>% 
+  merge(bas[ , c("player_id", "pa")], by = "player_id") %>%
+  separate(name, c("first","last"), sep = " ") %>% 
+  arrange(last) %>% 
+  unite("name", c("first", "last"), sep = " ") %>% 
+  select(name, team, pa)
+
+pas <- AS %>% 
+  filter(pos == 'SP' | pos == 'RP') %>% 
+  merge(pas[ , c("player_id", "ip")], by = "player_id") %>%
+  separate(name, c("first","last"), sep = " ") %>% 
+  arrange(last) %>% 
+  unite("name", c("first", "last"), sep = " ") %>% 
+  select(name, team, ip)
+
+View(bas)
+View(pas)
+```
+
+```{r AS1, message=FALSE, warning=FALSE}
+write_clip(AS1)
+```
+
+```{r AS2, message=FALSE, warning=FALSE}
+write_clip(AS2)
+```
+
+```{r HSAwards, message=FALSE, warning=FALSE}
+#import data (players_basic, players_value, players_career_pitching_stats, players_career_batting_stats)
+players <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+players_career_pitching_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_pitching_stats.csv")
+players_value <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_value.csv")
+players_career_batting_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_batting_stats.csv")
+
+#Reduce pitching data to HS in current year and find rank
+phs <- players_career_pitching_stats %>% 
+  select(player_id, year, level_id, league_id, split_id, bf, gs, wpa, war) %>% 
+  filter(level_id=='11' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  mutate(rank = 0.75*wpa+2*war+pot/30, position = "P") %>% 
+  select(player_id, league_id, name, rank, position)
+
+#Reduce hitting data to HS in current year and find rank
+bhs <- players_career_batting_stats %>% 
+  select(player_id, year, level_id, league_id, split_id, pa, wpa, war) %>% 
+  filter(level_id=='11' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  mutate(rank = 0.75*wpa+2*(war+0.5)+pot/30, position = "H") %>% 
+  select(player_id, league_id, name, rank, position)
+
+#merge hitters and pitchers for MVP
+hsmvp <- phs %>% 
+  bind_rows(bhs) %>% 
+  merge(leagues[ , c("league_id", "abbr")], by = "league_id") %>%
+  arrange(abbr, desc(rank)) %>% 
+  group_by(abbr) %>% 
+  top_n(3, rank) %>% 
+  select(name,position,abbr)
+
+#POY award
+hspoy <- phs %>% 
+  merge(leagues[ , c("league_id", "abbr")], by = "league_id") %>%
+  arrange(abbr, desc(rank)) %>% 
+  group_by(abbr) %>% 
+  top_n(3, rank) %>% 
+  select(name,abbr)
+
+View(hsmvp)
+View(hspoy)
+```
+
+```{r NCAAAwards, message=FALSE, warning=FALSE}
+players <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+players_career_pitching_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_pitching_stats.csv")
+players_value <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_value.csv")
+players_career_batting_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_batting_stats.csv")
+
+#Reduce pitching data to NCAA in current year and find rank
+pncaa <- players_career_pitching_stats %>% 
+  select(player_id, year, league_id, split_id, bf, gs, wpa, war) %>% 
+  filter(league_id=='208' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  mutate(rank = 0.75*wpa+2*war+pot/30, position = "P") %>% 
+  select(player_id, league_id, name, rank, position)
+
+#Reduce hitting data to NCAA in current year and find rank
+bncaa <- players_career_batting_stats %>% 
+  select(player_id, year, league_id, split_id, pa, wpa, war) %>% 
+  filter(league_id=='208' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  mutate(rank = 0.75*wpa+2*(war+0.5)+pot/30, position = "H") %>% 
+  select(player_id, league_id, name, rank, position)
+
+#merge hitters and pitchers for MVP
+ncaamvp <- pncaa %>% 
+  bind_rows(bncaa) %>% 
+  arrange(desc(rank)) %>% 
+  top_n(3, rank) %>% 
+  select(name,position)
+
+#POY award
+ncaapoy <- pncaa %>% 
+  arrange(desc(rank)) %>% 
+  top_n(3, rank) %>% 
+  select(name)
+
+View(ncaamvp)
+View(ncaapoy)
+```
+
+```{r MLBAllStars, message=FALSE, warning=FALSE}
+#import data (players_basic, players_value, players_career_pitching_stats, players_career_batting_stats)
+players <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+players_career_pitching_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_pitching_stats.csv")
+players_value <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_value.csv")
+players_career_batting_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_batting_stats.csv")
+
+#Reduce pitching data to MLB in current year
+pas <- players_career_pitching_stats %>% 
+  select(player_id, year, league_id, team_id, split_id, bf, gs, wpa, war) %>% 
+  filter(league_id=='100' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  merge(teams[ , c("team_id", "sub_league_id")], by = "team_id") %>% 
+  mutate(sprank = wpa+2*war,
+         rprank = 2*wpa+war)
+
+#select top 6 SP and top 4 RP for AL and NL
+ALAS <- pas %>% 
+  filter(gs!='0' & sub_league_id =='0') %>% 
+  select(player_id, name, sprank, war) %>% 
+  arrange(desc(sprank)) %>%
+  top_n(6,sprank) %>% 
+  mutate(pos="SP") %>% 
+  rename(rank = sprank)
+
+ALAS <- pas %>% 
+  filter(gs=='0' & wpa>'0' & sub_league_id =='0') %>% 
+  select(player_id, name, rprank, war) %>% 
+  arrange(desc(rprank)) %>% 
+  top_n(4,rprank) %>% 
+  mutate(pos="RP") %>% 
+  rename(rank = rprank) %>% 
+  bind_rows(ALAS, .)
+
+NLAS <- pas %>% 
+  filter(gs!='0' & sub_league_id =='1') %>% 
+  select(player_id, name, sprank, war) %>% 
+  arrange(desc(sprank)) %>%
+  top_n(6,sprank) %>% 
+  mutate(pos="SP") %>% 
+  rename(rank = sprank)
+
+NLAS <- pas %>% 
+  filter(gs=='0' & wpa>'0' & sub_league_id =='1') %>% 
+  select(player_id, name, rprank, war) %>% 
+  arrange(desc(rprank)) %>% 
+  top_n(4,rprank) %>% 
+  mutate(pos="RP") %>% 
+  rename(rank = rprank) %>% 
+  bind_rows(NLAS, .)
+
+#Filter batter data
+bas <- players_career_batting_stats %>% 
+  select(player_id, year, league_id, team_id, split_id, pa, wpa, war) %>% 
+  filter(league_id=='100' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name", "position")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  merge(teams[ , c("team_id", "sub_league_id")], by = "team_id") %>% 
+  mutate(brank = wpa+2*war)
+
+#select top 2 C and top 1 for every other position
+ALAS <- bas %>% 
+  filter(position=='2' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="C") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+ALAS <- bas %>% 
+  filter(position=='3' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="1B") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+ALAS <- bas %>% 
+  filter(position=='4' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="2B") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+ALAS <- bas %>% 
+  filter(position=='5' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="3B") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+ALAS <- bas %>% 
+  filter(position=='6' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="SS") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+ALAS <- bas %>% 
+  filter(position=='7' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="LF") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+ALAS <- bas %>% 
+  filter(position=='8' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="CF") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+ALAS <- bas %>% 
+  filter(position=='9' & sub_league_id =='0') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="RF") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+#filter out hitters already selected to all-star game
+lasth <- anti_join(bas, ALAS, by=c("brank"= "rank"))
+
+#select top 6 players not already selected
+ALAS <- lasth %>% 
+  filter(sub_league_id =='0') %>%
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(6,brank) %>% 
+  mutate(pos="H") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(ALAS, .)
+
+#select top 2 C and top 1 for every other position
+NLAS <- bas %>% 
+  filter(position=='2' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(2,brank) %>% 
+  mutate(pos="C") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+NLAS <- bas %>% 
+  filter(position=='3' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="1B") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+NLAS <- bas %>% 
+  filter(position=='4' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="2B") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+NLAS <- bas %>% 
+  filter(position=='5' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="3B") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+NLAS <- bas %>% 
+  filter(position=='6' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="SS") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+NLAS <- bas %>% 
+  filter(position=='7' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="LF") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+NLAS <- bas %>% 
+  filter(position=='8' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="CF") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+NLAS <- bas %>% 
+  filter(position=='9' & sub_league_id =='1') %>% 
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(1,brank) %>% 
+  mutate(pos="RF") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+#filter out hitters already selected to all-star game
+lasth <- anti_join(bas, NLAS, by=c("brank"= "rank"))
+
+#select top 6 players not already selected
+NLAS <- lasth %>% 
+  filter(sub_league_id =='1') %>%
+  select(player_id, name, brank, war) %>% 
+  arrange(desc(brank)) %>% 
+  top_n(6,brank) %>% 
+  mutate(pos="H") %>% 
+  rename(rank = brank) %>% 
+  bind_rows(NLAS, .)
+
+#create AL table for export to forum
+ALASF <- ALAS %>% 
+  select(player_id, name, war) %>% 
+  merge(players[ , c("player_id", "position", "team_id")], by = "player_id") %>%
+  merge(pos[ , c("posnum","posval")], by.x='position', by.y = 'posnum') %>%
+  merge(teams[ , c("team_id", "abbr")], by = "team_id") %>% 
+  select(c(6,4,5,7)) %>% 
+  mutate(war = round(war, digits = 2)) %>% 
+  rename(position = posval, team = abbr) %>% 
+  arrange(desc(war))
+
+#create NL table for export to forum
+NLASF <- NLAS %>% 
+  select(player_id, name, war) %>% 
+  merge(players[ , c("player_id", "position", "team_id")], by = "player_id") %>%
+  merge(pos[ , c("posnum","posval")], by.x='position', by.y = 'posnum') %>%
+  merge(teams[ , c("team_id", "abbr")], by = "team_id") %>% 
+  select(c(6,4,5,7)) %>% 
+  mutate(war = round(war, digits = 2)) %>% 
+  rename(position = posval, team = abbr) %>% 
+  arrange(desc(war))
+
+#Create tables to use for in-game voting
+ALAS <- ALAS %>% 
+  separate(name, c("first","last"), sep = " ") %>% 
+  arrange(last) %>% 
+  unite("name", c("first", "last"), sep = " ") %>% 
+  select(name)
+
+NLAS <- NLAS %>% 
+  separate(name, c("first","last"), sep = " ") %>% 
+  arrange(last) %>% 
+  unite("name", c("first", "last"), sep = " ") %>% 
+  select(name)
+
+View(ALAS)
+View(NLAS)
+```
+
+```{r ALAS, message=FALSE, warning=FALSE}
+write_clip(ALASF)
+```
+
+```{r NLAS, message=FALSE, warning=FALSE}
+write_clip(NLASF)
+```
+
+```{r MLBAwards, message=FALSE, warning=FALSE}
+players <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+players_career_pitching_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_pitching_stats.csv")
+players_value <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_value.csv")
+players_career_batting_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_batting_stats.csv")
+
+#Reduce pitching data to MLB in current year and find rank
+pmlb <- players_career_pitching_stats %>% 
+  select(player_id, year, league_id, team_id, split_id, bf, gs, wpa, war) %>% 
+  filter(league_id=='100' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  merge(teams[ , c("team_id", "sub_league_id")], by = "team_id") %>% 
+  mutate(sprank = wpa+2*war, rprank = 2*wpa+war)
+
+#Reduce hitting data to MLB in current year and find rank
+bmlb <- players_career_batting_stats %>% 
+  select(player_id, year, league_id, team_id, split_id, pa, wpa, war) %>% 
+  filter(league_id=='100' & split_id=='1'& year==max(year)) %>%
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(players_value[ , c("player_id", "pot")], by = "player_id") %>% 
+  merge(teams[ , c("team_id", "sub_league_id")], by = "team_id") %>%
+  mutate(rank = wpa+2*(war+0.5), position = "H")
+
+#merge hitters and pitchers for MVP
+mlbmvp <- pmlb %>% 
+  bind_rows(bmlb) %>% 
+  arrange(sub_league_id, desc(rank)) %>% 
+  group_by(sub_league_id) %>% 
+  top_n(3, rank) %>% 
+  select(player_id, name,position, sub_league_id)
+
+#POY award
+mlbpoy <- pmlb %>% 
+  arrange(sub_league_id, desc(sprank)) %>% 
+  group_by(sub_league_id) %>% 
+  top_n(3, sprank) %>% 
+  select(player_id, name, sub_league_id)
+
+#Reliever award
+mlbreloy <- pmlb %>% 
+  filter(gs=='0' & wpa>'0'& war>'0') %>% 
+  arrange(sub_league_id, desc(rprank)) %>% 
+  group_by(sub_league_id) %>% 
+  top_n(3,rprank) %>% 
+  select(name, sub_league_id)
+
+View(mlbmvp)
+View(mlbpoy)
+View(mlbreloy)
+```
+
+```{r UnsignedDraftees, message=FALSE, warning=FALSE}
+#import data (players_basic, players_value, players_career_pitching_stats, players_career_batting_stats)
+players <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+players_value <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_value.csv")
+ncaadate <- mdy(paste(3,"/",27,"/",as.numeric(players$age[players$player_id == '24']) + 
+  as.numeric(year(players$date_of_birth[players$player_id == '24'])) + 1))
+
+#Teams with fewer than 20 players
+lowteams <- players %>% 
+  filter(league_id == '208') %>% 
+  group_by(team_id) %>% 
+  tally() %>% 
+  merge(teams[ , c("team_id", "name")], by = "team_id") %>% 
+  arrange(n) %>% 
+  filter(n < '20')
+
+#Top unsigned players
+draftees <- players %>%
+  select(league_id, player_id, name, age, date_of_birth) %>% 
+  merge(leagues[ , c("league_id", "league_level")], 
+        by = "league_id", all = TRUE) %>% 
+  merge(players_value[ , c("player_id", "offensive_value_talent", 
+                           "pitching_value_talent")], 
+        by = "player_id") %>% 
+  replace_na(list(league_level = 0)) %>% 
+  filter((league_id == '0' & age <= 19) | league_level == '11') %>% 
+  mutate(nxtage = ncaadate - ymd(date_of_birth), 
+         value = pmax(offensive_value_talent,pitching_value_talent)) %>% 
+  filter(nxtage >= '6877' & value >=1000) %>% 
+  arrange(desc(value)) %>%
+  select(name)
+
+View(lowteams)
+View(draftees)
+```
+

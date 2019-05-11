@@ -1,0 +1,114 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+```{r General, message=FALSE, warning=FALSE}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(Hmisc)
+library(clipr)
+library(lubridate)
+teams <- read_csv('Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/general/teams.csv')
+pos <- data.frame('posnum' = c(1,2,3,4,5,6,7,8,9),'posval' = c('P','C','1B','2B','3B','SS','LF','CF','RF'))
+leagues <- read_csv('Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/general/leagues.csv')
+players <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players.csv")
+players <- unite(players, name, c("first_name","last_name"), sep = " ")
+players_career_batting_stats <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_career_batting_stats.csv")
+players_awards <- read_csv("Out of the Park Developments/OOTP Baseball 19/saved_games/OOTPLeagueReborn.lg/import_export/csv/players_awards.csv")
+```
+
+```{r}
+#Find number of awards for each player
+mvps <- players_awards %>% 
+  filter(award_id=='5') %>% 
+  select(player_id, league_id, award_id) %>% 
+  group_by(player_id, league_id, award_id) %>% 
+  tally()
+View(mvps)
+#Players get credit for finishing in the top 3, not just winning
+```
+
+```{r}
+#Career MLB and feeder totals
+
+#Career MLB WAR
+mlbwar <- players_career_batting_stats %>% 
+  filter(level_id=='1' & split_id=='1') %>%
+  select(player_id, war) %>% 
+  group_by(player_id) %>% 
+  summarise(mlbtotwar = sum(war))
+
+#Career feeder WAR
+feedwar <- players_career_batting_stats %>%
+  filter((level_id=='1'|level_id=='7'|level_id=='10'|level_id=='11') & split_id=='1') %>%
+  select(player_id, league_id, war) %>% 
+  group_by(player_id, league_id) %>% 
+  summarise(feedtotwar = sum(war)) %>% 
+  merge(players[ , c("player_id", "name")], by = "player_id") %>% 
+  merge(leagues[ , c("league_id", "abbr")], by = "league_id") %>%
+  arrange(league_id, desc(feedtotwar)) %>% 
+  group_by(league_id)
+
+```
+
+
+```{r}
+#Find top WAR position players in league histories
+top <- players_career_batting_stats %>%
+  filter((level_id=='1'|level_id=='7'|level_id=='10'|level_id=='11') & split_id=='1') %>%
+  select(player_id, league_id, war) %>% 
+  group_by(player_id, league_id) %>% 
+  summarise(total = sum(war)) %>% 
+  merge(players[ , c("player_id", "name", "age")], by = "player_id") %>% 
+  merge(leagues[ , c("league_id", "abbr")], by = "league_id") %>%
+  arrange(league_id, desc(total)) %>% 
+  group_by(league_id) %>% 
+  top_n(10,total) %>% 
+  merge(mvps[ , c("player_id", "league_id", "n")], 
+        by=c("player_id","league_id")) %>% 
+  select(abbr, player_id, name, age, total, n) %>% 
+  merge(mlbwar[ , c("player_id", "mlbtotwar")], by="player_id") %>%
+  arrange(abbr, desc(total))
+View(top)
+```
+
+```{r}
+### MLB Career WAR by feeder league
+
+#Find feeder league for each player
+feed <- players_career_batting_stats %>% 
+  select(player_id, level_id, league_id) %>% 
+  group_by(player_id) %>% 
+  distinct() %>% 
+  top_n(1, level_id) %>% 
+  merge(mlbwar[ , c("player_id", "mlbtotwar")], by="player_id") %>% 
+  filter(level_id=='10'|level_id=='11') %>% 
+  group_by(league_id) %>% 
+  top_n(10, mlbtotwar) %>% 
+  merge(players[ , c("player_id", "name", "age")], by = "player_id") %>% 
+  merge(leagues[ , c("league_id", "abbr")], by = "league_id") %>%
+  select(abbr, player_id, name, age, mlbtotwar) %>% 
+  merge(feedwar[ , c("player_id", "feedtotwar","abbr")], 
+        by=c("player_id","abbr")) %>%
+  arrange(abbr, desc(mlbtotwar))
+View(feed)
+```
+
+```{r}
+#Find names on both lists
+joined <- semi_join(feed, top, by = c("player_id", "abbr"))
+View(joined)
+```
+
